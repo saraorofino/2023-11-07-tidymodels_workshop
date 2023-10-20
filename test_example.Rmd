@@ -1,0 +1,67 @@
+---
+title: "Intro to `tidymodels`"
+author: "Casey O'Hara"
+date: "2023-10-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The challenge: developing a predictive model
+
+The problem: model selection
+
+Evaluating competing models: AIC/BIC vs. cross validation
+
+* need some scoring mechanism to compare results: RMSE, accuracy, area under ROC
+* information criteria balance a good fit (yay) with complexity (boo) to reduce chance of overfitting
+* cross validation uses part of the data for training the model, and another part to test how well the model works
+
+https://www.tidymodels.org/start/models/
+
+https://www.tidymodels.org/start/recipes/
+
+https://www.tidymodels.org/start/resampling/
+
+https://www.tidymodels.org/start/tuning/
+
+https://www.tidymodels.org/start/case-study/
+
+```{r}
+library(tidyverse)
+
+diamonds_10fold <- diamonds %>%
+  mutate(fold = sample(1:10, size = n(), replace = TRUE))
+
+diamonds_test  <- diamonds_10fold %>%
+  filter(fold == 1)
+diamonds_train <- diamonds_10fold %>%
+  filter(fold != 1)
+  
+mdl1 <- lm(price ~ carat + cut + color, data = diamonds_train)
+mdl2 <- lm(price ~ carat + color + clarity, data = diamonds_train)
+mdl3 <- lm(price ~ carat + cut + color + clarity, data = diamonds_train)
+
+test_df <- diamonds_test %>%
+  mutate(pred1 = predict(mdl1, diamonds_test),
+         pred2 = predict(mdl2, .),
+         pred3 = predict(mdl3, .)) %>%
+  mutate(diff1 = pred1 - price,
+         diff2 = pred2 - price,
+         diff3 = pred3 - price)
+
+calc_rmse <- function(x) {
+  rmse <- x^2 %>%
+    sum() %>%
+    sqrt()
+  
+  return(rmse)
+}
+
+calc_rmse(test_df$diff1)
+calc_rmse(test_df$diff2)
+calc_rmse(test_df$diff3)
+```
+
