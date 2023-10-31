@@ -7,17 +7,22 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(here)
+library(tidymodels)
+
 ```
 
-The challenge: developing a predictive model
+# Intro
 
-The problem: model selection
+For this workshop/tutorial, we will use the `tidymodels` package to quickly generate and test predictive models, both regression models (predicting a numeric output based on various inputs) and classification models (predicting a categorical output based on various inputs).
 
-Evaluating competing models: AIC/BIC vs. cross validation
+This fits squarely within the Tidyverse data science cycle:
 
-* need some scoring mechanism to compare results: RMSE, accuracy, area under ROC
-* information criteria balance a good fit (yay) with complexity (boo) to reduce chance of overfitting
-* cross validation uses part of the data for training the model, and another part to test how well the model works
+![](img/data_cycle.png)
+
+This borrows a lot from the Posit `tidymodels` tutorial that can be found here - visit these pages for more in-depth exploration of the `tidymodels` package:
 
 https://www.tidymodels.org/start/models/
 
@@ -29,39 +34,175 @@ https://www.tidymodels.org/start/tuning/
 
 https://www.tidymodels.org/start/case-study/
 
-```{r}
-library(tidyverse)
+## Basic model selection with cross validation on a regression task
 
-diamonds_10fold <- diamonds %>%
-  mutate(fold = sample(1:10, size = n(), replace = TRUE))
+We want to create a model that best predicts some outcome, based on a set of predictor variables.  Here let's use the built-in diamonds dataset, and try creating a linear model to predict price based on combinations of carat, cut, color, clarity.  Some things we will do:
 
-diamonds_test  <- diamonds_10fold %>%
+* from the data create a training set and test set
+    * training set for determining values for the model coefficients
+    * validation set to see how well the model predicts values from previously unseen data
+* create several variations of linear models, using the training set
+* use the variations of models to predict price of a diamond based on some set of variables
+* create a function to "score" how closely each model predicts price relative to the "known" prices in the validation set
+* score each model and see which one most closely predicts.
+
+```{r load data and quick viz}
+data(diamonds) ### built into ggplot package
+head(diamonds) 
+
+ggplot(diamonds, aes(x = carat, y = price, color = color, shape = cut)) +
+  geom_point() +
+  theme_minimal()
+
+```
+
+
+``` {r manual cross validation}
+
+### pseudorandom number generator seed, so we all get the same
+### "random" results every time
+set.seed(42) 
+
+diamonds_10fold <- diamonds %>% ### dataset built into ggplot package, see data()
+  mutate(fold = rep(1:10, length.out = n()),
+         fold = sample(fold, size = n(), replace = FALSE)) %>%
+  mutate(random = runif(n = n()))
+
+### table(diamonds_10fold$fold)
+
+diamonds_validate <- diamonds_10fold %>%
   filter(fold == 1)
 diamonds_train <- diamonds_10fold %>%
   filter(fold != 1)
   
-mdl1 <- lm(price ~ carat + cut + color, data = diamonds_train)
-mdl2 <- lm(price ~ carat + color + clarity, data = diamonds_train)
+### train on training dataset, saving test data for validation
+mdl1 <- lm(price ~ carat + cut + color,           data = diamonds_train)
+mdl2 <- lm(price ~ carat + color + clarity,       data = diamonds_train)
 mdl3 <- lm(price ~ carat + cut + color + clarity, data = diamonds_train)
 
-test_df <- diamonds_test %>%
-  mutate(pred1 = predict(mdl1, diamonds_test),
-         pred2 = predict(mdl2, .),
+### use model to predict values for test dataset
+test_df <- diamonds_validate %>%
+  mutate(pred1 = predict(mdl1, diamonds_validate),
+         pred2 = predict(mdl2, .),  ### note shortcut of `.`
          pred3 = predict(mdl3, .)) %>%
-  mutate(diff1 = pred1 - price,
-         diff2 = pred2 - price,
-         diff3 = pred3 - price)
+  mutate(resid1 = pred1 - price,
+         resid2 = pred2 - price,
+         resid3 = pred3 - price)
 
+### Write a scoring function - root-mean-square error
 calc_rmse <- function(x) {
-  rmse <- x^2 %>%
-    sum() %>%
-    sqrt()
+  ### x is a vector - square all elements, take mean, then square-root the mean
+  sq_error <- x^2 
+  mean_sq_error <- mean(sq_error)
+  rt_mean_sq_error <- sqrt(mean_sq_error)
   
-  return(rmse)
+  return(rt_mean_sq_error)
 }
 
-calc_rmse(test_df$diff1)
-calc_rmse(test_df$diff2)
-calc_rmse(test_df$diff3)
+### Compare scores for each model
+calc_rmse(test_df$resid1) ### 1467
+calc_rmse(test_df$resid2) ### 1177
+calc_rmse(test_df$resid3) ### 1166
+```
+
+How would we interpret these results?
+
+* Model 1, with price ~ carat + cut + color, did the worst job of predicting (highest RMSE by a long shot)
+* Model 2, swapping out cut and replacing with clarity, did a much better job of predicting than model 1.  It seems like clarity is far more important to predicting price than the cut
+* Model 3 had the lowest RMSE, so is best of these three models.  Adding cut on top of model 2 modestly improved the predictive performance.
+* Play around with other combinations - can you come up with a really bad model?  What happens if you drop carat as a predictor?  why does this make sense?
+
+From here, we could iterate (loop, apply functions, purrr package...) to compare models across each of the various folds.  This is called "K-fold cross validation" - we just did ten-fold cross validation.  Five, ten, or n-fold (leave one out CV) are pretty commonly used.
+
+The automation route would work just fine! but would be a little tedious.
+
+### Thinking through things
+
+Questions to consider:
+
+* How could you use this in other situations?
+    * any numeric prediction model, e.g., body mass of penguins, sea surface temperatures, nutrient pollution runoff.
+* Why did we train the model on one subset of data and validate it on a different subset?
+    * To avoid overfitting - where the model is really good at predicting this exact set of data, but garbage at predicting based on new, previously unseen data.
+    * This is important because some more advanced algorithms (e.g., random forest, neural nets) can essentially "memorize" the training data and then appear to perfectly predict it afterward.
+* How does this compare to AIC or BIC?
+    * xIC methods look at how "likely" the current set of data are with a given model - and add a penalty based on the number of predictors... each additional predictor is guaranteed to improve the likelihood value, but at a risk of overfitting. 
+
+
+## Let's try cross validation in tidymodels with a classifier task
+
+Let's use the titanic dataset (the complex one from the `titanic` R package, not the simplified version available in base R).
+
+Here we will do two levels of splits: surv_test to test the performance our *final* model, not the folds used in cross validation!
+
+![](img/resampling.svg)
+
+```{r writing out data from titanic package, eval = FALSE}
+t_df <- titanic::titanic_train %>%
+  janitor::clean_names()
+write_csv(t_df, here('data/titanic_survival.csv'))
+```
+
+```{r load complete titanic data}
+t_df <- read_csv(here('data/titanic_survival.csv'))
+### View(t_df) ### examine the data
+
+### Let's do a little processing to create a "survival" dataframe
+surv_df <- t_df %>%
+  mutate(survived = (survived == 1),
+         pclass   = factor(pclass)) %>% ### turn some variables to boolean or factor
+  select(-cabin, -ticket) ### lots of NAs here - and not likely to be very helpful
+
+### exploratory plots: try sex, fare, etc
+ggplot(surv_df, aes(x = pclass, fill = survived)) +
+  geom_bar()
+
+ggplot(surv_df, aes(x = age, fill = survived)) +
+  geom_histogram()
+```
+
+Which predictor variables seem like they might be good at predicting survival (TRUE vs FALSE)?
+
+## Using `tidymodels`
+
+### Split the data
+
+We will set aside ("partition") a portion of the data for building and comparing our models (80%), and a portion for training our models after we've selected the best one (20%).  NOT the same as folds - that will happen in the training/validation step.
+
+```{r split the data}
+### Check balance of survived column
+surv_df %>%
+  count(survived) %>%
+  mutate(prop = n / sum(n))
+### if very unbalanced, choose a stratified split to make sure there are enough
+### survivors in the test and training splits.
+
+set.seed(123)
+
+surv_split <- initial_split(surv_df, prop = 0.80, strata = survived)
+surv_train_df <- training(surv_split)
+surv_test_df <- testing(surv_split)
+```
+
+
+The `tidymodels` package uses "recipes" to specify how the model will process and work with the data.  Here we'll create a binomial logistic regression model that we can then apply to our partitioned dataset.
+
+First off, there are some columns that probably have no bearing on survival, but we might want to keep in the analysis for digging deeper or identifying troublesome cases - passenger ID, name, maybe ticket number - we could drop them, but then perhaps harder to troubleshoot.  We can `update_role()` these to tell R that these are ID columns, not predictors.
+
+```{r create a recipe}
+surv_rec <- recipe(survived ~ ., data = surv_train_df) %>%
+  update_role(name, passenger_id, new_role = 'id') %>%
+  step_dummy(sex, embarked)
+
+summary(surv_rec)
+```
+
+Note - other `step_x` functions for defining columns as date-time, etc... as well as a `step_zv` function to drop any zero-variance predictors (no variance means no value in predicting!).  See the linked tutorials above and take a look depending on your own data set!
+
+Now we've specified how the data should be used inside a model, let's apply a model to it!
+
+```{r set up a binary logistic regression model with our data}
+blr_mdl <- logistic_reg() %>%
+  set_engine('glm') ### this is the default - we could try engines from other packages or functions
 ```
 
