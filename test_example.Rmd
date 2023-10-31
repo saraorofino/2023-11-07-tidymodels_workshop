@@ -10,7 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
 library(here)
-library(tidymodels)
+
+### a metapackage like tidyverse, tidymodels contains many model-relevant 
+### packages incl rsample, parsnip, recipes, yardstick, broom - we don't 
+### need to worry about the differences here...
+library(tidymodels) 
+
 
 ```
 
@@ -131,7 +136,13 @@ Questions to consider:
 
 ## Let's try cross validation in tidymodels with a classifier task
 
-Let's use the titanic dataset (the complex one from the `titanic` R package, not the simplified version available in base R).
+Let's use the titanic dataset (the complex one from the `titanic` R package, not the simplified version available in base R).  This dataset contains information on passengers including name, age, ticket number, passenger class, sex... and whether they survived the tragedy or not.  Here we can create a model to predict survival (survived/didn't survive) based on various predictor variables.  Because we're predicting a categorical outcome (survived/didn't), this is a "classification" task.
+
+Consider: what is an example of a categorical outcome you might see in your own research/studies, that would be relevant to a classification task?
+
+* Species threatened status (threatened vs. not threatened)
+* Species identity (coastal live oak vs. interior live oak)
+* Support for a ballot proposition (likely to vote for vs. against).
 
 Here we will do two levels of splits: surv_test to test the performance our *final* model, not the folds used in cross validation!
 
@@ -149,8 +160,8 @@ t_df <- read_csv(here('data/titanic_survival.csv'))
 
 ### Let's do a little processing to create a "survival" dataframe
 surv_df <- t_df %>%
-  mutate(survived = (survived == 1),
-         pclass   = factor(pclass)) %>% ### turn some variables to boolean or factor
+  mutate(survived = factor(survived),   ### categorical outcome variables need to be factors
+         pclass   = factor(pclass)) %>% ### turn some predictors to factor
   select(-cabin, -ticket) ### lots of NAs here - and not likely to be very helpful
 
 ### exploratory plots: try sex, fare, etc
@@ -180,10 +191,77 @@ surv_df %>%
 set.seed(123)
 
 surv_split <- initial_split(surv_df, prop = 0.80, strata = survived)
+  ### stratified on `survived`; training and test splits will both have ~60/40% survived = 0/1
 surv_train_df <- training(surv_split)
 surv_test_df <- testing(surv_split)
 ```
 
+### Basic model
+
+We can set up a basic logistic regression model using `parsnip`, which contains a bunch of different model types, and links to multiple model engines for each type (e.g., there are multiple R packages that can calculate a linear model).  The `parsnip` package consolidates a lot of these and helps make the parameters, arguments, and results consistent.
+
+```{r set up a binary logistic regression model with our data}
+blr_mdl <- logistic_reg() %>%
+  set_engine('glm') ### this is the default - we could try engines from other packages or functions
+
+blr_fit <- blr_mdl %>%
+  fit(survived ~ sex + pclass, data = surv_train_df)
+### let's also create a model we know will be bad:
+garbage_fit <- blr_mdl %>%
+  fit(survived ~ passenger_id + embarked, data = surv_train_df)
+
+blr_fit
+```
+
+Males are far less likely to survive than reference class female (negative means lower odds which translates to lower probability); passenger classes 2 and 3 are also less likely to survive than reference class 1.
+
+How well does this model predict survival of the test dataset?  Let's use our fitted model from the training set on the test set, and create a confusion matrix to see how well the predictions line up.
+
+```{r}
+surv_test_predict <- surv_test_df %>%
+  ### straight up prediction, based on 50% prob threshold (to .pred_class):
+  mutate(predict(blr_fit, new_data = surv_test_df)) %>%
+  ### but can also get the raw probabilities of class A vs B (.pred_A, .pred_B):
+  mutate(predict(blr_fit, new_data = ., type = 'prob'))
+    ### note use of `.` as shortcut for "the current dataframe"
+
+table(surv_test_predict %>%
+        select(survived, .pred_class))
+
+#         .pred_class
+# survived  0  1
+#        0 93 17
+#        1 17 52
+```
+
+Try it with a new formula above, can you find a model that improves accuracy?
+
+Metrics: we can use metrics from the `yardstick` package to test accuracy and the Receiver Operating Characteristic curve...
+```{r}
+yardstick::accuracy(surv_test_predict, truth = survived, estimate = .pred_class)
+```
+
+![from https://glassboxmedicine.com/2019/02/23/measuring-performance-auc-auroc/](img/roc-curve-v2.png)
+```{r}
+roc_df <- roc_curve(surv_test_predict, truth = survived, .pred_0)
+autoplot(roc_df)
+
+### how about our garbage model?
+garbage_test_df <- surv_test_df %>%
+  mutate(predict(garbage_fit, new_data = ., type = 'prob')) 
+
+garbage_roc_df <- garbage_test_df %>%
+  roc_curve(truth = survived, .pred_0) 
+
+autoplot(garbage_roc_df)
+
+### Calculate area under curve
+yardstick::roc_auc(surv_test_predict, truth = survived, .pred_0)
+yardstick::roc_auc(garbage_test_df, truth = survived, .pred_0)
+```
+
+
+### Recipes
 
 The `tidymodels` package uses "recipes" to specify how the model will process and work with the data.  Here we'll create a binomial logistic regression model that we can then apply to our partitioned dataset.
 
@@ -199,10 +277,6 @@ summary(surv_rec)
 
 Note - other `step_x` functions for defining columns as date-time, etc... as well as a `step_zv` function to drop any zero-variance predictors (no variance means no value in predicting!).  See the linked tutorials above and take a look depending on your own data set!
 
-Now we've specified how the data should be used inside a model, let's apply a model to it!
+Now we've specified how the data should be used inside a model, let's apply a model to it!  We'll use a binary logistic regression, which predicts the probability (technically, log odds) of outcome A vs. outcome B based on a linear combination of predictors.
 
-```{r set up a binary logistic regression model with our data}
-blr_mdl <- logistic_reg() %>%
-  set_engine('glm') ### this is the default - we could try engines from other packages or functions
-```
 
