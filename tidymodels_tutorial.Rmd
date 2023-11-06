@@ -1,7 +1,7 @@
 ---
-title: "Intro to `tidymodels`"
+title: "A gentle introduction to `tidymodels`"
 author: "Casey O'Hara"
-date: "2023-10-20"
+date: "2023-11-07"
 output: html_document
 ---
 
