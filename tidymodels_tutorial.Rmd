@@ -17,8 +17,7 @@ library(here)
 ### packages incl rsample, parsnip, recipes, yardstick, broom - we don't 
 ### need to worry about the differences here...
 library(tidymodels) 
-
-
+library(ranger)
 ```
 
 # Intro
@@ -63,6 +62,7 @@ ggplot(diamonds, aes(x = carat, y = price, color = color, shape = cut)) +
 
 ```
 
+Manual version to help build foundation for understanding tidymodels
 
 ``` {r manual cross validation}
 
@@ -73,10 +73,9 @@ set.seed(42)
 diamonds_10fold <- diamonds %>% ### dataset built into ggplot package, see data()
   mutate(fold = rep(1:10, length.out = n()),
          fold = sample(fold, size = n(), replace = FALSE)) %>%
-  mutate(random = runif(n = n()))
+  mutate(random = runif(n = n())) # Generate folds for cross validation 
 
-### table(diamonds_10fold$fold)
-
+### Train/test split 
 diamonds_validate <- diamonds_10fold %>%
   filter(fold == 1)
 diamonds_train <- diamonds_10fold %>%
@@ -243,12 +242,16 @@ Try it with a new formula above, can you find a model that improves accuracy?  H
 
 Metrics: we can use metrics from the `yardstick` package (within `tidymodels`) to test accuracy and the Receiver Operating Characteristic curve...
 ```{r}
-accuracy(surv_test_predict, truth = survived, estimate = .pred_class)
+accuracy(surv_test_predict, truth = survived, estimate = .pred_class) # correctly classified 81% of the time (true positive or true negative); other 19% is either false positive or false negative 
 ```
 
 ![from https://glassboxmedicine.com/2019/02/23/measuring-performance-auc-auroc/](img/roc-curve-v2.png)
+Difference between accuracy and ROC:  
+ - accuracy relates to both true positive and true negatives, so 81% accuracy means that 81% of the time it correctly predicted survived if the person survived and did not survive if the person did not survive 
+ - ROC relates only to true v. false positives (not negatives), so 86% of the time the model predicted survival if the person survived (and 14% of the time it predicted survived if the person did not survive)
+ 
 ```{r}
-roc_df <- roc_curve(surv_test_predict, truth = survived, .pred_0)
+roc_df <- roc_curve(surv_test_predict, truth = survived, .pred_0) 
 autoplot(roc_df)
 
 ### how about our garbage model?
@@ -261,6 +264,7 @@ garbage_roc_df <- garbage_test_df %>%
 autoplot(garbage_roc_df)
 
 ### Calculate area under curve - 50% is random guessing, 100% is perfect classifier
+### larger areas (closer to 1) are better 
 yardstick::roc_auc(surv_test_predict, truth = survived, .pred_0)
 yardstick::roc_auc(garbage_test_df, truth = survived, .pred_0)
 ```
